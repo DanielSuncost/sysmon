@@ -72,9 +72,22 @@ function sparkDouble(percent) {
     return `${first}${second}`;
 }
 
+function gpuUnavailable() {
+    return {available: false, utilization: 0, vramPercent: 0, memoryUsedMb: 0, memoryTotalMb: 0, tempC: 0};
+}
+
 class StatsSampler {
     constructor() {
         this._previousCpu = null;
+        this._gpuVendor = this._detectGpuVendor();
+    }
+
+    _detectGpuVendor() {
+        if (runCommand(['nvidia-smi', '--query-gpu=name', '--format=csv,noheader']).ok)
+            return 'nvidia';
+        if (runCommand(['rocm-smi', '--version']).ok)
+            return 'amd';
+        return null;
     }
 
     sample() {
@@ -93,7 +106,8 @@ class StatsSampler {
     }
 
     _getCpuPercent() {
-        const stat = readFile('/proc/stat').split('\n')[0] && readFile('/proc/stat').split('\n')[0].trim();
+        const statLine = readFile('/proc/stat').split('\n')[0];
+        const stat = statLine && statLine.trim();
         if (!stat)
             return 0;
 
@@ -140,6 +154,14 @@ class StatsSampler {
     }
 
     _getGpuStats() {
+        if (this._gpuVendor === 'nvidia')
+            return this._getNvidiaGpuStats();
+        if (this._gpuVendor === 'amd')
+            return this._getAmdGpuStats();
+        return gpuUnavailable();
+    }
+
+    _getNvidiaGpuStats() {
         const result = runCommand([
             'nvidia-smi',
             '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu',
@@ -147,11 +169,12 @@ class StatsSampler {
         ]);
 
         if (!result.ok || !result.stdout)
-            return {available: false, utilization: 0, vramPercent: 0, memoryUsedMb: 0, memoryTotalMb: 0, tempC: 0};
+            return gpuUnavailable();
 
-        const first = result.stdout.split('\n')[0] && result.stdout.split('\n')[0].trim();
+        const firstLine = result.stdout.split('\n')[0];
+        const first = firstLine && firstLine.trim();
         if (!first)
-            return {available: false, utilization: 0, vramPercent: 0, memoryUsedMb: 0, memoryTotalMb: 0, tempC: 0};
+            return gpuUnavailable();
 
         const [utilStr, usedStr, totalStr, tempStr] = first.split(',').map(s => s.trim());
         const utilization = Number.parseFloat(utilStr);
@@ -163,6 +186,48 @@ class StatsSampler {
         return {
             available: true,
             utilization: clampPercent(utilization),
+            vramPercent: clampPercent(vramPercent),
+            memoryUsedMb: Number.isFinite(memoryUsedMb) ? memoryUsedMb : 0,
+            memoryTotalMb: Number.isFinite(memoryTotalMb) ? memoryTotalMb : 0,
+            tempC: Number.isFinite(tempC) ? tempC : 0,
+        };
+    }
+
+    _getAmdGpuStats() {
+        // rocm-smi --csv reports VRAM in bytes; temperature header varies by sensor
+        // (e.g. "Temperature (Sensor edge) (C)") so we match by prefix.
+        const result = runCommand([
+            'rocm-smi',
+            '--showuse', '--showmeminfo', 'vram', '--showtemp',
+            '--csv',
+        ]);
+
+        if (!result.ok || !result.stdout)
+            return gpuUnavailable();
+
+        const lines = result.stdout.split('\n').filter(function(l) { return l.trim(); });
+        if (lines.length < 2)
+            return gpuUnavailable();
+
+        const headers = lines[0].split(',').map(function(h) { return h.trim().toLowerCase(); });
+        const values = lines[1].split(',').map(function(v) { return v.trim(); });
+
+        const col = function(keyword) {
+            const i = headers.findIndex(function(h) { return h.includes(keyword); });
+            return i >= 0 ? values[i] : null;
+        };
+
+        const utilization = Number.parseFloat(col('gpu use') || '0');
+        const memTotalB = Number.parseFloat(col('vram total memory') || '0');
+        const memUsedB = Number.parseFloat(col('vram total used') || '0');
+        const tempC = Number.parseFloat(col('temperature') || '0');
+        const memoryTotalMb = memTotalB / (1024 * 1024);
+        const memoryUsedMb = memUsedB / (1024 * 1024);
+        const vramPercent = memoryTotalMb > 0 ? (memoryUsedMb / memoryTotalMb) * 100 : 0;
+
+        return {
+            available: true,
+            utilization: clampPercent(Number.isFinite(utilization) ? utilization : 0),
             vramPercent: clampPercent(vramPercent),
             memoryUsedMb: Number.isFinite(memoryUsedMb) ? memoryUsedMb : 0,
             memoryTotalMb: Number.isFinite(memoryTotalMb) ? memoryTotalMb : 0,
@@ -197,6 +262,14 @@ class StatsSampler {
     }
 
     _getGpuProcesses() {
+        if (this._gpuVendor === 'nvidia')
+            return this._getNvidiaGpuProcesses();
+        if (this._gpuVendor === 'amd')
+            return this._getAmdGpuProcesses();
+        return [];
+    }
+
+    _getNvidiaGpuProcesses() {
         const result = runCommand([
             'nvidia-smi',
             '--query-compute-apps=pid,process_name,used_gpu_memory',
@@ -211,7 +284,7 @@ class StatsSampler {
             const trimmed = line.trim();
             if (!trimmed)
                 continue;
-            const parts = trimmed.split(',').map(v => v.trim());
+            const parts = trimmed.split(',').map(function(v) { return v.trim(); });
             if (parts.length < 3)
                 continue;
             rows.push({
@@ -219,6 +292,42 @@ class StatsSampler {
                 name: parts[1],
                 usedMb: Number.parseInt(parts[2], 10) || 0,
             });
+        }
+        return rows;
+    }
+
+    _getAmdGpuProcesses() {
+        // rocm-smi --showpids --csv columns: PID, PPID, Name, GPU, VRAM (B)
+        const result = runCommand(['rocm-smi', '--showpids', '--csv']);
+
+        if (!result.ok || !result.stdout)
+            return [];
+
+        const lines = result.stdout.split('\n').filter(function(l) { return l.trim(); });
+        if (lines.length < 2)
+            return [];
+
+        const headers = lines[0].split(',').map(function(h) { return h.trim().toLowerCase(); });
+        const rows = [];
+
+        for (const line of lines.slice(1)) {
+            const parts = line.split(',').map(function(v) { return v.trim(); });
+            if (parts.length < headers.length)
+                continue;
+
+            const col = function(keyword) {
+                const i = headers.findIndex(function(h) { return h.includes(keyword); });
+                return i >= 0 ? parts[i] : '';
+            };
+
+            const pid = col('pid');
+            const name = col('name') || col('process');
+            const vramB = Number.parseFloat(col('vram')) || 0;
+
+            if (!pid || !name)
+                continue;
+
+            rows.push({pid, name, usedMb: Math.round(vramB / (1024 * 1024))});
         }
         return rows;
     }
