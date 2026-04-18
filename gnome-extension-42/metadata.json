@@ -1,0 +1,7 @@
+{
+  "uuid": "sysmon@dopppo",
+  "name": "SysMon",
+  "description": "Top bar CPU/RAM/GPU monitor with live text and dropdown stats.",
+  "shell-version": ["42"],
+  "version": 1
+}

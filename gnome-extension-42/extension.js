@@ -1,13 +1,13 @@
-import Cairo from 'cairo';
-import Clutter from 'gi://Clutter';
-import GLib from 'gi://GLib';
-import GObject from 'gi://GObject';
-import St from 'gi://St';
+/* global imports */
+const Cairo = imports.cairo;
+const Clutter = imports.gi.Clutter;
+const GLib = imports.gi.GLib;
+const GObject = imports.gi.GObject;
+const St = imports.gi.St;
 
-import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+const Main = imports.ui.main;
+const PanelMenu = imports.ui.panelMenu;
+const PopupMenu = imports.ui.popupMenu;
 
 const FAST_INTERVAL_SECONDS = 1;
 const SLOW_INTERVAL_SECONDS = 5;
@@ -106,7 +106,8 @@ class StatsSampler {
     }
 
     _getCpuPercent() {
-        const stat = readFile('/proc/stat').split('\n')[0]?.trim();
+        const statLine = readFile('/proc/stat').split('\n')[0];
+        const stat = statLine && statLine.trim();
         if (!stat)
             return 0;
 
@@ -170,7 +171,8 @@ class StatsSampler {
         if (!result.ok || !result.stdout)
             return gpuUnavailable();
 
-        const first = result.stdout.split('\n')[0]?.trim();
+        const firstLine = result.stdout.split('\n')[0];
+        const first = firstLine && firstLine.trim();
         if (!first)
             return gpuUnavailable();
 
@@ -203,22 +205,22 @@ class StatsSampler {
         if (!result.ok || !result.stdout)
             return gpuUnavailable();
 
-        const lines = result.stdout.split('\n').filter(l => l.trim());
+        const lines = result.stdout.split('\n').filter(function(l) { return l.trim(); });
         if (lines.length < 2)
             return gpuUnavailable();
 
-        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-        const values = lines[1].split(',').map(v => v.trim());
+        const headers = lines[0].split(',').map(function(h) { return h.trim().toLowerCase(); });
+        const values = lines[1].split(',').map(function(v) { return v.trim(); });
 
-        const col = keyword => {
-            const i = headers.findIndex(h => h.includes(keyword));
+        const col = function(keyword) {
+            const i = headers.findIndex(function(h) { return h.includes(keyword); });
             return i >= 0 ? values[i] : null;
         };
 
-        const utilization = Number.parseFloat(col('gpu use') ?? '0');
-        const memTotalB = Number.parseFloat(col('vram total memory') ?? '0');
-        const memUsedB = Number.parseFloat(col('vram total used') ?? '0');
-        const tempC = Number.parseFloat(col('temperature') ?? '0');
+        const utilization = Number.parseFloat(col('gpu use') || '0');
+        const memTotalB = Number.parseFloat(col('vram total memory') || '0');
+        const memUsedB = Number.parseFloat(col('vram total used') || '0');
+        const tempC = Number.parseFloat(col('temperature') || '0');
         const memoryTotalMb = memTotalB / (1024 * 1024);
         const memoryUsedMb = memUsedB / (1024 * 1024);
         const vramPercent = memoryTotalMb > 0 ? (memoryUsedMb / memoryTotalMb) * 100 : 0;
@@ -282,7 +284,7 @@ class StatsSampler {
             const trimmed = line.trim();
             if (!trimmed)
                 continue;
-            const parts = trimmed.split(',').map(v => v.trim());
+            const parts = trimmed.split(',').map(function(v) { return v.trim(); });
             if (parts.length < 3)
                 continue;
             rows.push({
@@ -301,20 +303,20 @@ class StatsSampler {
         if (!result.ok || !result.stdout)
             return [];
 
-        const lines = result.stdout.split('\n').filter(l => l.trim());
+        const lines = result.stdout.split('\n').filter(function(l) { return l.trim(); });
         if (lines.length < 2)
             return [];
 
-        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const headers = lines[0].split(',').map(function(h) { return h.trim().toLowerCase(); });
         const rows = [];
 
         for (const line of lines.slice(1)) {
-            const parts = line.split(',').map(v => v.trim());
+            const parts = line.split(',').map(function(v) { return v.trim(); });
             if (parts.length < headers.length)
                 continue;
 
-            const col = keyword => {
-                const i = headers.findIndex(h => h.includes(keyword));
+            const col = function(keyword) {
+                const i = headers.findIndex(function(h) { return h.includes(keyword); });
                 return i >= 0 ? parts[i] : '';
             };
 
@@ -331,7 +333,8 @@ class StatsSampler {
     }
 }
 
-const SysMonIndicator = GObject.registerClass(
+// var rather than const so GObject can register the class in module scope
+var SysMonIndicator = GObject.registerClass(
 class SysMonIndicator extends PanelMenu.Button {
     _init() {
         super._init(0.0, 'SysMon');
@@ -530,14 +533,12 @@ class SysMonIndicator extends PanelMenu.Button {
         const start = -Math.PI / 2;
         const end = start + (2 * Math.PI * clamped / 100);
 
-        // Base donut track, no outer card.
         cr.setLineWidth(3.2);
         cr.setSourceRGBA(1, 1, 1, 0.14);
         cr.newSubPath();
         cr.arc(cx, cy, ringRadius, 0, 2 * Math.PI);
         cr.stroke();
 
-        // Filled arc.
         if (clamped > 0) {
             cr.setSourceRGBA(fillRgb[0], fillRgb[1], fillRgb[2], 0.82);
             cr.newSubPath();
@@ -545,7 +546,6 @@ class SysMonIndicator extends PanelMenu.Button {
             cr.stroke();
         }
 
-        // Subtle inner definition.
         cr.setLineWidth(1.0);
         cr.setSourceRGBA(0, 0, 0, 0.26);
         cr.newSubPath();
@@ -567,7 +567,6 @@ class SysMonIndicator extends PanelMenu.Button {
         const badgeW = 10.5;
         const badgeH = 8.5;
 
-        // Small dark badge so the label stays legible over both empty and filled meters.
         cr.setSourceRGBA(0, 0, 0, 0.30);
         this._roundedRect(cr, badgeX, badgeY, badgeW, badgeH, 2);
         cr.fill();
@@ -597,16 +596,18 @@ class SysMonIndicator extends PanelMenu.Button {
     }
 });
 
-export default class SysMonExtension extends Extension {
-    enable() {
-        this._indicator = new SysMonIndicator();
-        Main.panel.addToStatusArea(this.uuid, this._indicator, 1, 'right');
-    }
+let _indicator = null;
 
-    disable() {
-        if (this._indicator) {
-            this._indicator.destroy();
-            this._indicator = null;
-        }
+function init() {}
+
+function enable() {
+    _indicator = new SysMonIndicator();
+    Main.panel.addToStatusArea('sysmon@dopppo', _indicator, 1, 'right');
+}
+
+function disable() {
+    if (_indicator) {
+        _indicator.destroy();
+        _indicator = null;
     }
 }
