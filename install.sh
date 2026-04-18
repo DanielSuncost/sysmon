@@ -3,7 +3,20 @@ set -euo pipefail
 
 UUID="sysmon@dopppo"
 EXT_DIR="$HOME/.local/share/gnome-shell/extensions/$UUID"
-SRC_DIR="$(pwd)/gnome-extension"
+
+GNOME_MAJOR=$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+if [[ -z "$GNOME_MAJOR" ]]; then
+  echo "Could not detect GNOME Shell version. Is gnome-shell installed?"
+  exit 1
+fi
+
+if [[ "$GNOME_MAJOR" -ge 45 ]]; then
+  SRC_DIR="$(pwd)/gnome-extension"
+  echo "Detected GNOME $GNOME_MAJOR — installing modern extension (GNOME 45+)"
+else
+  SRC_DIR="$(pwd)/gnome-extension-42"
+  echo "Detected GNOME $GNOME_MAJOR — installing legacy extension (GNOME 42–44)"
+fi
 
 if [[ ! -d "$SRC_DIR" ]]; then
   echo "Missing $SRC_DIR"
